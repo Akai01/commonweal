@@ -59,6 +59,16 @@ A leaked identity is full impersonation of that member until an admin publishes 
 without them. Migration raises the floor and does not erase the past: the old bytes stay
 recoverable from the disk until it is overwritten.
 
+**An engine `api_key`, if you pass one on the command line.** The `--engine` spec accepts
+`{"api_key": "..."}` for a backend that wants an `Authorization` header — a hosted
+gateway rather than a local llama.cpp. Written inline it lands in `ps` output for every
+local user and in the shell history, which is a weaker place than this project puts its
+own keys. It never leaves the peer and is not part of the federation's trust model, but
+it is somebody's credential: for a backend that needs one, pass the spec through a
+`0600` file (`--engine "$(cat engine.json)"`) or a systemd `EnvironmentFile` rather than
+typing it into the command. A local engine on `127.0.0.1` needs no key at all, which is
+the configuration this is built around.
+
 **A compromised client machine.** The plaintext and the master secret both live there.
 
 **Traffic analysis.** The coordinator sees who talks to whom, when, and how much. TLS
