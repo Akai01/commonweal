@@ -25,7 +25,7 @@ Trust is inherited from outside the system. That single assumption is what lets
 the design stay small: it does not have to defend against its own participants,
 so it needs no consensus, no redundant re-execution, and no homomorphic
 cryptography. It is **not** a blockchain, a volunteer network, or a marketplace
-(see §8).
+(see §10).
 
 ## 2. Trust boundary
 

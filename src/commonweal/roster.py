@@ -104,7 +104,7 @@ class Peer:
     """A machine -- or a shard group -- contributing capacity.
 
     `engine`/`engine_version`/`hw_class` exist because a heterogeneous
-    federation cannot promise byte-identical output (see ARCHITECTURE §13).
+    federation cannot promise byte-identical output (see ARCHITECTURE §9).
     They are stamped onto every response so a user who sees two different
     answers can tell why.
 

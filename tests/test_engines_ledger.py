@@ -149,8 +149,8 @@ def test_ledger_persists_to_disk(tmp_path):
 
 
 def test_divergence_fields_recorded():
-    """§13: every served request stamps engine and hardware class so output
-    divergence across a heterogeneous federation can be traced."""
+    """ARCHITECTURE §9: every served request stamps engine and hardware class so
+    output divergence across a heterogeneous federation can be traced."""
     led = Ledger()
     led.record_consumption(
         member_id="bob",
