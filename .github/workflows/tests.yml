@@ -1,0 +1,70 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # 3.12 is the floor in pyproject.toml; 3.13 catches deprecations early.
+        python-version: ["3.12", "3.13"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e '.[dev]'
+
+      - name: Run the suite
+        # The tests start real uvicorn servers on ephemeral ports and generate a
+        # real CA for the TLS run, so they need no network and no engine -- but
+        # they do need a few seconds. A timeout keeps a hung server from burning
+        # the job's full six hours.
+        timeout-minutes: 10
+        run: pytest -q
+
+  # The keychain path is optional at runtime, so it needs its own job: a plain
+  # `pip install -e .` must keep working for the headless servers that run peers,
+  # and the optional extra must not break anything when it *is* present.
+  optional-keyring:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install without the optional extra
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e '.[dev]'
+
+      - name: A clean install has no keychain and must not care
+        run: |
+          python -c "
+          from commonweal.client.keys import keyring_available
+          assert keyring_available() is False, 'expected no backend on a CI runner'
+          print('no keychain, as expected')"
+          pytest -q tests/test_identity_storage.py
+
+      - name: Install the extra and re-run
+        run: |
+          pip install -e '.[dev,keyring]'
+          pytest -q tests/test_identity_storage.py

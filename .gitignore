@@ -1,0 +1,36 @@
+# Python
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.ruff_cache/
+
+# SECRETS -- identity files contain Ed25519 and X25519 PRIVATE KEYS.
+# Never commit these; a leaked identity is full impersonation until the
+# roster is updated (see docs/THREAT-MODEL.md).
+identity.json
+*identity.json
+*.pem
+*.key
+*.crt
+.env
+
+# Local state
+roster.json
+*.db
+
+# Model weights and engine binaries. docs/ENGINE-NOTES.md tells a contributor to
+# download these; a stray `git add -A` afterwards would otherwise commit gigabytes.
+*.gguf
+llama-b*/
+*.tgz
+
+# Scratch
+demo/
+*.log
+# Working notes kept locally; not part of the published tree.
+docs/HANDOFF.md
