@@ -179,6 +179,37 @@ async def test_peer_health_discloses_configuration_but_never_membership():
         assert leaked not in blob, f"{leaked!r} must not be on an open endpoint"
 
 
+async def test_no_generated_api_docs_are_served():
+    """FastAPI mounts /docs, /redoc and /openapi.json unauthenticated by default.
+
+    Both servers turn them off. The wire format is specified in
+    docs/PROTOCOL.md, so a generated schema tells a reader nothing new, while an
+    interactive request builder on a public always-on service is surface with no
+    matching use. A framework default is exactly the kind of thing that comes
+    back on a dependency bump, so it is pinned rather than assumed.
+    """
+    from commonweal.coordinator.app import Coordinator
+    from commonweal.coordinator.app import create_app as coordinator_app
+
+    alice, bob = Identity("alice"), Identity("bob")
+    entry = {
+        "id": "bob-ws", "owner": "bob", "enc_pub": bob.enc_pub,
+        "endpoint": "http://127.0.0.1:9101", "model": "mock-1b",
+        "engine": "mock", "engine_version": "0", "hw_class": "test",
+        "capacity_gb": 8.0, "max_concurrent": 2,
+    }
+    doc = build_roster({"alice": alice, "bob": bob}, admins=["alice"], peers=[entry])
+    roster = Roster.load(doc, trusted_admin_keys={"alice": alice.sign_pub})
+
+    for app in (create_app(_peer(MockEngine())), coordinator_app(Coordinator(roster))):
+        port = free_port()
+        async with serve(app, port) as url:
+            async with httpx.AsyncClient(timeout=10) as c:
+                for path in ("/docs", "/redoc", "/openapi.json", "/docs/oauth2-redirect"):
+                    resp = await c.get(f"{url}{path}")
+                    assert resp.status_code == 404, f"{path} is served on {url}"
+
+
 async def test_working_engine_is_ready():
     peer = _peer(MockEngine())
     readiness = await peer.ready()

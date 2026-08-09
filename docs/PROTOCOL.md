@@ -251,7 +251,11 @@ POST /v1/roster   POST /v1/stats   POST /v1/concurrency — members only
 ```
 
 Only `/v1/health` is unauthenticated, and it reveals nothing beyond liveness, the
-federation id and the roster version. The other three carry the federation's metadata —
+federation id and the roster version. That is meant literally: both servers disable
+FastAPI's generated `/docs`, `/redoc` and `/openapi.json`, which are open by default.
+This document is the specification, so a generated schema tells a reader nothing new,
+and an interactive request builder on a public always-on service is surface with no
+matching use. The other three carry the federation's metadata —
 who is in it, where their machines are, when they are active — and the coordinator is
 public and always-on, so they require the same signed wrapper as `/v1/lease` (an empty
 `body` is fine). Members' metadata is members' business; a passer-by gets `401`.
@@ -275,6 +279,8 @@ the port — knows where to find them.
 POST /infer     — a signed, sealed envelope (§3). Verified against the roster.
 GET  /health    — open
 ```
+
+Exactly those two: the generated documentation routes are disabled here as well.
 
 `POST /infer` is the data plane: the sender is checked against the roster and the
 envelope's freshness and `request_id` are checked before anything is decrypted, so an

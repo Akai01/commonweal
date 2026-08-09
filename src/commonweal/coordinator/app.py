@@ -81,7 +81,17 @@ def _error(status: int, code: str, message: str) -> JSONResponse:
 
 
 def create_app(coordinator: Coordinator) -> FastAPI:
-    app = FastAPI(title="commonweal coordinator", version="0.1.0")
+    # FastAPI serves /docs, /redoc and /openapi.json unauthenticated by default.
+    # This process is meant to be public and always-on, and the threat model says
+    # only /v1/health is open -- which would not be true with a Swagger console
+    # mounted next to it. The wire format is specified in docs/PROTOCOL.md, so a
+    # generated schema adds nothing a reader of this repository does not have,
+    # and an interactive request builder aimed at a public service is surface
+    # with no corresponding use.
+    app = FastAPI(
+        title="commonweal coordinator", version="0.1.0",
+        docs_url=None, redoc_url=None, openapi_url=None,
+    )
     app.state.coordinator = coordinator
 
     @app.get("/v1/health")

@@ -175,7 +175,13 @@ def _estimate_tokens(chars: int) -> int:
 
 
 def create_app(peer: Peer) -> FastAPI:
-    app = FastAPI(title=f"commonweal peer {peer.config.peer_id}", version="0.1.0")
+    # No /docs, /redoc or /openapi.json. A peer is the one component that holds
+    # plaintext, and the schema it would publish is already in docs/PROTOCOL.md.
+    # Same reasoning as the coordinator; see the comment there.
+    app = FastAPI(
+        title=f"commonweal peer {peer.config.peer_id}", version="0.1.0",
+        docs_url=None, redoc_url=None, openapi_url=None,
+    )
     app.state.peer = peer
 
     @app.get("/health")

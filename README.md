@@ -164,7 +164,7 @@ commonweal guarantees equivalence, not bit-identity, and stamps `engine`,
 | `src/commonweal/tlsconfig.py` | transport security for every hop |
 
 ```bash
-.venv/bin/python -m pytest -q     # 210 tests
+.venv/bin/python -m pytest -q     # 211 tests
 ```
 
 ## Docs
