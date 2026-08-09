@@ -1,5 +1,10 @@
 [build-system]
-requires = ["setuptools>=68.0"]
+# 77 is the floor for the PEP 639 `license = "MIT"` string below, not a
+# preference: setuptools 68 rejects it outright ("`project.license` must be
+# valid exactly by one definition"). Build isolation hides that by fetching a
+# current setuptools, so the mismatch only surfaces on a --no-build-isolation
+# build -- distro packaging, conda-build, an offline mirror.
+requires = ["setuptools>=77.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
