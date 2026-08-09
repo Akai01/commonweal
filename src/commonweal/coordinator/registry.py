@@ -16,29 +16,13 @@ from dataclasses import dataclass, field
 
 from ..ledger import Ledger
 from ..roster import Peer, Roster, RosterError
+from ..sanitise import sanitise_detail
 
 # A missed heartbeat or two should not evict a peer mid-request; three should.
 DEFAULT_HEARTBEAT_TIMEOUT = 90.0
 # Guards against a peer that vanishes for hours then heartbeats once, claiming
 # the whole gap as residency it may not have held.
 MAX_CREDITED_INTERVAL = 300.0
-
-
-MAX_DETAIL_CHARS = 200
-
-
-def _sanitise(detail: object) -> str:
-    """Clean a peer-supplied reason string before it can be echoed onward.
-
-    The text originates in an engine error message, so it is backend output that
-    nobody here wrote, and `/v1/stats` echoes it to every member's terminal.
-    Printable characters only, whitespace collapsed, bounded length.
-    """
-    if not isinstance(detail, str):
-        return ""
-    cleaned = " ".join(detail.split())
-    cleaned = "".join(ch for ch in cleaned if ch.isprintable())
-    return cleaned[:MAX_DETAIL_CHARS]
 
 
 @dataclass
@@ -123,7 +107,7 @@ class Registry:
         peer = self.roster.peer(peer_id)  # raises for peers not on the roster
         now = self._clock()
         resident_gb = self._capped(peer, resident_gb)
-        detail = _sanitise(detail)
+        detail = sanitise_detail(detail)
         state = self._state.get(peer_id)
 
         if state is None:

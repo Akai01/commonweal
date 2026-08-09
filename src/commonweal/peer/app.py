@@ -25,6 +25,7 @@ from ..engines import Engine, EngineError, GenerationParams, NoAnswerError, Usag
 from ..proto import Chunk, Envelope, ProtocolError, Receipt
 from ..replay import NonceCache, ReplayError, check_fresh
 from ..roster import Roster, RosterError
+from ..sanitise import sanitise_detail
 
 # One token, no sampling: enough to prove the engine can actually run the model,
 # cheap enough to do while idle.
@@ -179,10 +180,20 @@ def create_app(peer: Peer) -> FastAPI:
 
     @app.get("/health")
     async def health():
+        """Liveness for the coordinator -- and the one endpoint here with no
+        signature check, because a peer that could only be probed by an
+        authenticated caller could not be monitored by ordinary tooling.
+
+        `detail` is sanitised for the same reason the coordinator sanitises it
+        before `/v1/stats` echoes it: the text comes out of an engine's error
+        body, and this response goes to whoever asked, including an operator's
+        terminal. What the endpoint discloses is documented in
+        docs/PROTOCOL.md §7 and accounted for in docs/THREAT-MODEL.md.
+        """
         readiness = await peer.ready()
         return {
             "status": "ok" if readiness.ok else "degraded",
-            "detail": readiness.reason,
+            "detail": sanitise_detail(readiness.reason),
             "peer_id": peer.config.peer_id,
             "model": peer.engine.model,
             "engine": peer.engine.name,

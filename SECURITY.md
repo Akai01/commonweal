@@ -58,6 +58,12 @@ things that look like vulnerabilities are documented design.
   deliberately unencrypted so the ledger can work; it learns *how much*, never *what*.
 - **Traffic analysis**: request timing, sizes, and which peer served which member are
   visible to the coordinator by construction.
+- **A peer's unauthenticated `GET /health`** disclosing its model, engine, engine version
+  and hardware class. It takes no signature so that ordinary monitoring can reach it, and
+  what it discloses is spelled out in `docs/PROTOCOL.md` §7 and `docs/THREAT-MODEL.md`.
+  Use `--tls-client-ca` to keep it inside the federation. A report that it exposes
+  something *beyond* that list — anything about members, prompts, the roster, or key
+  material — is very much in scope.
 - **A member over-reporting the memory it holds**, within its roster-declared cap. That
   is a social problem in a federation that already assumes trust.
 - **Anything requiring an already-compromised client machine.** The plaintext and the

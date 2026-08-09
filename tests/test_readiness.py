@@ -10,7 +10,6 @@ so readiness has to exercise the model rather than the port.
 from __future__ import annotations
 
 import httpx
-import pytest
 
 from commonweal.engines import EngineError, GenerationParams, MockEngine, NoAnswerError, Usage
 from commonweal.peer import Peer, PeerConfig, create_app
@@ -108,6 +107,76 @@ async def test_health_endpoint_reports_degraded_and_says_why():
             body = (await c.get(f"{url}/health")).json()
     assert body["status"] == "degraded"
     assert "shard 2 is gone" in body["detail"]
+
+
+# --- what an unauthenticated caller gets from a peer --------------------
+#
+# `/health` takes no signature, so it is reachable by anyone who can reach the
+# peer. That is deliberate -- an uptime monitor cannot sign -- but it means the
+# response is a published surface rather than an internal one, and it needs the
+# same treatment the coordinator gives `detail` before /v1/stats echoes it.
+
+
+class HostileEngine:
+    """A backend whose error body is not text you would print unexamined.
+
+    Not hypothetical: `OpenAICompatEngine` puts up to 400 characters of the
+    backend's raw response into the `EngineError` it raises, and an engine sitting
+    behind a gateway can put anything at all in there.
+    """
+
+    name, version, model = "hostile", "0", "mock-1b"
+
+    async def health(self):
+        return True
+
+    async def stream(self, messages, params):
+        raise EngineError(
+            "engine returned 401: \x1b[31mred\x1b[0m\r\n\ttabbed\x00null " + "x" * 500
+        )
+        yield ""      # pragma: no cover
+
+
+async def test_peer_health_sanitises_engine_text_before_returning_it():
+    from commonweal.sanitise import MAX_DETAIL_CHARS
+
+    port = free_port()
+    async with serve(create_app(_peer(HostileEngine())), port) as url:
+        async with httpx.AsyncClient(timeout=10) as c:
+            detail = (await c.get(f"{url}/health")).json()["detail"]
+
+    assert "\x1b" not in detail, "an ANSI escape would reach the operator's terminal"
+    assert "\x00" not in detail
+    assert "\r" not in detail and "\n" not in detail and "\t" not in detail
+    assert len(detail) <= MAX_DETAIL_CHARS
+    assert "engine returned 401" in detail, "still has to be a usable diagnostic"
+
+
+async def test_peer_health_discloses_configuration_but_never_membership():
+    """Pins the unauthenticated disclosure so it stays a decision, not a drift.
+
+    Model, engine, engine version and hardware class are exposed on purpose and
+    are documented in docs/PROTOCOL.md §7 and docs/THREAT-MODEL.md. Anything
+    about members, the roster, or the federation itself must not be.
+    """
+    port = free_port()
+    async with serve(create_app(_peer(MockEngine())), port) as url:
+        async with httpx.AsyncClient(timeout=10) as c:
+            resp = await c.get(f"{url}/health")     # no signature, no credential
+
+    assert resp.status_code == 200
+    body = resp.json()
+    # The exact set, not a subset: a field added here becomes public the day it
+    # ships, so widening the disclosure should have to be a deliberate edit.
+    assert set(body) == {
+        "status", "detail", "peer_id", "model", "engine", "engine_version", "hw_class",
+    }
+    # `peer_id` is "bob-ws", so the owner's name is inherently part of an id the
+    # roster already publishes. Nothing *else* about the federation may leak:
+    # not its name, and not a member who does not run this peer.
+    blob = str(body).lower()
+    for leaked in ("alice", "test-lab"):
+        assert leaked not in blob, f"{leaked!r} must not be on an open endpoint"
 
 
 async def test_working_engine_is_ready():
@@ -371,7 +440,7 @@ def test_detail_reaches_the_stats_snapshot():
 
 
 def test_detail_is_length_bounded():
-    from commonweal.coordinator.registry import MAX_DETAIL_CHARS
+    from commonweal.sanitise import MAX_DETAIL_CHARS
 
     reg = _registry()
     reg.heartbeat("bob-ws", detail="x" * 5000)

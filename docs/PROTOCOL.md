@@ -265,7 +265,50 @@ concurrency is changing rather than the steady state.
 keys. Serving it grants the coordinator no authority, and the signature requirement
 protects its contents, not its integrity.
 
-## 7. Transport
+## 7. The peer's own surface
+
+Everything above is the coordinator. A peer serves two endpoints of its own, and its
+`endpoint` is named in the roster, so anyone holding a roster — and anyone who scans
+the port — knows where to find them.
+
+```
+POST /infer     — a signed, sealed envelope (§3). Verified against the roster.
+GET  /health    — open
+```
+
+`POST /infer` is the data plane: the sender is checked against the roster and the
+envelope's freshness and `request_id` are checked before anything is decrypted, so an
+unauthenticated caller cannot spend the peer's capacity or its CPU.
+
+`GET /health` takes **no signature**, deliberately — a peer that could only be probed
+by an authenticated caller could not be watched by an ordinary uptime monitor or a
+container orchestrator. It is not the same disclosure as the coordinator's
+`/v1/health`, and the difference is worth stating plainly:
+
+```json
+{"status": "ok", "detail": "served a request 3s ago", "peer_id": "bob-ws",
+ "model": "glm-5.2", "engine": "sglang", "engine_version": "0.4",
+ "hw_class": "cuda-sm90"}
+```
+
+So an unauthenticated caller who can reach a peer learns which model it serves, which
+engine and **which version** of it, and what class of hardware is underneath. The
+version is the part worth thinking about: it names a specific build of an external
+program, which is exactly what someone hunting for a known vulnerability in llama.cpp
+or vLLM would want. `docs/THREAT-MODEL.md` records this rather than leaving it to be
+discovered.
+
+`detail` is sanitised on the way out — printable characters only, whitespace collapsed,
+200 characters — by the same rule the coordinator applies before `/v1/stats` echoes it.
+The string originates in an engine's error body, so it is untrusted text arriving at an
+operator's terminal, and a backend is free to put an ANSI escape sequence in it.
+
+A peer binds to `127.0.0.1` by default and has to be deliberately exposed. Where the
+coordinator reaches it across a network, mutual TLS (`--tls-client-ca`) is the way to
+keep `/health` off the public internet without giving up monitoring inside the
+federation.
+
+## 8. Transport
 
 All hops support TLS. Servers take `--tls-cert/--tls-key`, and `--tls-client-ca` to
 require client certificates (mutual TLS). Clients take `--ca-bundle`,

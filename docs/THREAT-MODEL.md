@@ -27,7 +27,7 @@ compute — a matmul on ciphertext is not a matmul.
 | **The coordinator** | relays sealed bytes; holds no decryption key. Asserted by `test_coordinator_cannot_decrypt` |
 | Tampering in transit | AES-GCM tag → hard abort, never partial delivery |
 | Non-members submitting work | Ed25519 signature checked against the signed roster |
-| Non-members mapping the federation | `/v1/roster`, `/v1/stats` and `/v1/concurrency` require a member signature; only `/v1/health` is open |
+| Non-members reading the federation's metadata *from the coordinator* | `/v1/roster`, `/v1/stats` and `/v1/concurrency` require a member signature; only `/v1/health` is open. This is the coordinator only — see the peer `/health` entry below |
 | Replayed control requests | nonce cache + timestamp window (120 s, 30 s skew grace) |
 | Replayed sealed envelopes | `ts` is inside the envelope's signed bytes; the peer refuses stale envelopes and remembers seen `request_id`s, and a lease redeems exactly once at the coordinator |
 | Reordered / replayed response chunks | counter-derived nonces; wrong position fails authentication |
@@ -65,6 +65,24 @@ recoverable from the disk until it is overwritten.
 hides this from the *network*, not from the coordinator. Members see the same picture
 through the authenticated read endpoints; the signature requirement keeps it from
 *non-members*, nothing more.
+
+**A peer's `GET /health`, to anyone who can reach the peer.** Locking down the
+coordinator's read endpoints does not lock down the peers, and it would be easy to read
+the row above as though it did. Each peer serves an unauthenticated `/health` that
+names its model, its engine, its **engine version**, and its hardware class
+(docs/PROTOCOL.md §7). It is unauthenticated on purpose — a peer that only answered
+signed probes could not be watched by an ordinary uptime monitor — but the trade is
+real: an engine version identifies a specific build of an external program, which is
+the first thing someone looking for a known vulnerability in llama.cpp or vLLM wants.
+Nothing about members, prompts, or the roster is exposed there, and `/infer` next to it
+is fully authenticated, so this discloses configuration, never content or capacity.
+
+A peer binds to `127.0.0.1` by default and must be deliberately exposed. Where it is
+reachable across a network, `--tls-client-ca` (mutual TLS) keeps `/health` inside the
+federation while leaving monitoring possible for the members who hold a certificate.
+The `detail` string in that response is sanitised before it is returned — printable
+characters only, whitespace collapsed, 200 characters — because it originates in an
+engine's error body and ends up in an operator's terminal.
 
 **Replay, across a restart.** Both replay caches — the coordinator's nonce cache and
 the peer's envelope seen-set — are in memory, so a restart forgets them. The signed
