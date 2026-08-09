@@ -19,7 +19,7 @@ import httpx
 
 from ..coordinator.auth import sign_request
 from ..crypto import SealError, seal_request, sign_envelope, unseal_chunk
-from ..proto import KIND_CHUNK, KIND_RECEIPT, Chunk, ProtocolError, Receipt, unb64
+from ..proto import KIND_CHUNK, KIND_RECEIPT, Chunk, Receipt, unb64
 from ..tlsconfig import DEFAULT_TLS, TLSConfig
 from .keys import Identity
 
