@@ -176,6 +176,8 @@ commonweal guarantees equivalence, not bit-identity, and stamps `engine`,
 | [docs/THREAT-MODEL.md](docs/THREAT-MODEL.md) | what is and is not protected |
 | [docs/ENGINE-NOTES.md](docs/ENGINE-NOTES.md) | what live backends actually do — reasoning fields, usage frames |
 | [SECURITY.md](SECURITY.md) | how to report a vulnerability, and which findings are documented design |
+| [CONTRIBUTING.md](CONTRIBUTING.md) | how to build and test it, and the conventions that are not obvious from the code |
+| [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) | Contributor Covenant 2.1 |
 
 ## Status
 
