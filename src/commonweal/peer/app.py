@@ -25,7 +25,7 @@ from ..engines import Engine, EngineError, GenerationParams, NoAnswerError, Usag
 from ..proto import Chunk, Envelope, ProtocolError, Receipt
 from ..replay import NonceCache, ReplayError, check_fresh
 from ..roster import Roster, RosterError
-from ..sanitise import sanitise_detail
+from ..sanitise import sanitise_detail, sanitise_message
 
 # One token, no sampling: enough to prove the engine can actually run the model,
 # cheap enough to do while idle.
@@ -271,9 +271,18 @@ def create_app(peer: Peer) -> FastAPI:
                     ) + "\n"
                     seq += 1
             except EngineError as exc:
+                # `OpenAICompatEngine` puts up to 400 characters of the backend's
+                # raw error body in here, and this frame is **not** encrypted: it
+                # crosses the untrusted coordinator in clear on its way to the
+                # client's terminal. So an engine behind a gateway must not be
+                # able to reach through it with an ANSI escape, nor say more about
+                # the request than the receipt already concedes. Bounded at
+                # MAX_MESSAGE_CHARS, not MAX_DETAIL_CHARS, because a NoAnswerError
+                # carries the guidance telling an operator how to get an answer.
                 yield json.dumps(
                     {"kind": "error", "v": 1,
-                     "request_id": envelope.request_id, "message": str(exc)}
+                     "request_id": envelope.request_id,
+                     "message": sanitise_message(str(exc))}
                 ) + "\n"
                 return
 

@@ -264,3 +264,131 @@ async def test_engine_failure_surfaces_as_client_error():
             with pytest.raises(Exception, match="exploded"):
                 await client.complete([{"role": "user", "content": "hi"}], model="mock-1b")
             assert coordinator.registry.state("bob-ws").in_flight == 0
+
+
+# --- untrusted text on the one path that is not encrypted ------------------
+#
+# An `error` frame is emitted when the status code is already spent, so unlike
+# every chunk beside it, it is **not** sealed -- a client that never got a
+# session key still has to be able to read it. That makes it the one part of a
+# response the untrusted coordinator can read, and it carries text neither the
+# peer nor the coordinator wrote.
+
+
+async def test_engine_error_text_is_sanitised_before_it_leaves_the_peer():
+    """`OpenAICompatEngine` puts up to 400 characters of a backend's raw error
+    body into the `EngineError` it raises, and that message becomes an unsealed
+    error frame. Without sanitising it here, an engine behind a gateway could put
+    an ANSI escape into an operator's terminal -- the same attack
+    `test_peer_health_sanitises_engine_text_before_returning_it` covers on
+    /health -- and could volunteer more about a request to the coordinator than
+    the receipt deliberately concedes."""
+    from commonweal.engines import EngineError
+    from commonweal.sanitise import MAX_MESSAGE_CHARS
+
+    class HostileEngine:
+        name, version, model = "hostile", "0", "mock-1b"
+
+        async def health(self):
+            return True
+
+        async def stream(self, messages, params):
+            yield "partial"
+            raise EngineError(
+                "engine returned 401: \x1b[31mred\x1b[0m\r\n\ttabbed\x00null " + "x" * 500
+            )
+
+    alice, bob, peer, pport, coordinator, cport = await _build(engine=HostileEngine())
+    async with serve(create_peer(peer), pport):
+        async with serve(create_coordinator(coordinator), cport) as coord_url:
+            await _beat(coord_url, bob)
+            client = _client(coord_url, alice)
+            with pytest.raises(Exception) as caught:
+                await client.complete([{"role": "user", "content": "hi"}], model="mock-1b")
+
+    message = str(caught.value)
+    assert "\x1b" not in message, "an ANSI escape would reach the operator's terminal"
+    assert "\x00" not in message
+    assert "\r" not in message and "\n" not in message and "\t" not in message
+    assert len(message) <= MAX_MESSAGE_CHARS
+    assert "engine returned 401" in message, "still has to be a usable diagnostic"
+
+
+async def test_sanitising_an_error_frame_keeps_the_guidance_that_makes_it_actionable():
+    """Bounding the message must not cost the operator the instruction.
+
+    The adapter's reasoning-model error is 203 characters and every one of them
+    is load-bearing: the first half says what went wrong, the second says how to
+    get the answer back (`raise max_tokens, or set "include_reasoning": true`).
+    A 200-character bound kept the diagnosis and truncated the fix mid-word,
+    which turns the message this project added to *prevent* a silent failure
+    into one that hides its own remedy. Three characters over the limit is the
+    kind of miss that never announces itself, so it is pinned here.
+    """
+    from commonweal.engines import NoAnswerError
+    from commonweal.sanitise import MAX_MESSAGE_CHARS
+
+    guidance = (
+        'engine spent its budget on reasoning and returned no answer '
+        '(188 characters of reasoning, finish_reason=length); raise max_tokens, or set '
+        '"include_reasoning": true on the engine spec to keep the thinking'
+    )
+    assert len(guidance) > 200, "precondition: this is why the shorter bound was wrong"
+
+    class ThinkingEngine:
+        name, version, model = "thinking", "0", "mock-1b"
+
+        async def health(self):
+            return True
+
+        async def stream(self, messages, params):
+            raise NoAnswerError(guidance)
+            yield ""      # pragma: no cover - makes this an async generator
+
+    alice, bob, peer, pport, coordinator, cport = await _build(engine=ThinkingEngine())
+    async with serve(create_peer(peer), pport):
+        async with serve(create_coordinator(coordinator), cport) as coord_url:
+            await _beat(coord_url, bob)
+            client = _client(coord_url, alice)
+            with pytest.raises(Exception) as caught:
+                await client.complete([{"role": "user", "content": "hi"}], model="mock-1b")
+
+    message = str(caught.value)
+    assert len(message) <= MAX_MESSAGE_CHARS
+    assert message == guidance, "the whole diagnostic, not just the diagnosis"
+    assert 'include_reasoning' in message and 'raise max_tokens' in message
+
+
+async def test_relayed_peer_error_body_is_sanitised_before_it_reaches_the_client():
+    """The coordinator's own error frame embeds up to 400 characters of the
+    peer's raw HTTP response body, so the same untrusted text arrives by a second
+    route. A peer is a member's machine, not a trusted formatter of terminal
+    output, and a compromised one must not be able to write escape sequences into
+    every other member's terminal."""
+    from fastapi import FastAPI
+    from fastapi.responses import PlainTextResponse
+
+    from commonweal.sanitise import MAX_MESSAGE_CHARS
+
+    hostile_peer = FastAPI()
+
+    @hostile_peer.post("/infer")
+    async def infer():
+        return PlainTextResponse(
+            "\x1b[31mboom\x1b[0m\r\n\tinner\x00text " + "y" * 500, status_code=500
+        )
+
+    alice, bob, peer, pport, coordinator, cport = await _build()
+    async with serve(hostile_peer, pport):
+        async with serve(create_coordinator(coordinator), cport) as coord_url:
+            await _beat(coord_url, bob)
+            client = _client(coord_url, alice)
+            with pytest.raises(Exception) as caught:
+                await client.complete([{"role": "user", "content": "hi"}], model="mock-1b")
+
+    message = str(caught.value)
+    assert "\x1b" not in message
+    assert "\x00" not in message
+    assert "\r" not in message and "\n" not in message and "\t" not in message
+    assert len(message) <= MAX_MESSAGE_CHARS
+    assert "peer returned 500" in message, "still has to say what happened"

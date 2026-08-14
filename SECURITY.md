@@ -56,6 +56,11 @@ things that look like vulnerabilities are documented design.
   designed for untrusted peers.
 - **The coordinator learning token counts and `finish_reason`.** The receipt frame is
   deliberately unencrypted so the ledger can work; it learns *how much*, never *what*.
+- **The coordinator seeing that a request failed**, and the bounded diagnostic in an
+  `error` frame. That frame is unencrypted for the same structural reason — a client
+  that never established a session key still has to be able to read why it failed. A
+  report that the string carries *content* rather than failure class, or that it escapes
+  the sanitiser, is in scope.
 - **Traffic analysis**: request timing, sizes, and which peer served which member are
   visible to the coordinator by construction.
 - **A peer's unauthenticated `GET /health`** disclosing its model, engine, engine version

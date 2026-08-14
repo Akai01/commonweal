@@ -202,6 +202,23 @@ text would understate the ledger in the serving peer's favour.
 {"kind": "error", "v": 1, "request_id": "…", "message": "…"}
 ```
 
+Like the receipt, and unlike every chunk beside it, an error frame is **not
+encrypted**: a client that failed before establishing a session key still has to be
+able to read why. So it is the second thing in a response the coordinator can read.
+
+`message` is therefore **sanitised by whoever emits it** — printable characters only,
+whitespace collapsed, 400 characters. The text is not the emitter's own: a peer's
+message can carry up to 400 characters of its engine's raw error body, and the
+coordinator's up to 400 characters of the peer's raw HTTP response. Both end at an
+operator's terminal, and a backend is free to put an ANSI escape in either. Bounding
+it also keeps an engine's error text from volunteering more about a request to the
+coordinator than the receipt deliberately concedes.
+
+The bound is larger than `detail`'s 200 on purpose: `detail` sits beside a `healthy`
+flag that already carries the decision, whereas an error frame is the last thing a
+caller gets and has to stay actionable alone. The adapter's reasoning-model guidance
+is 203 characters, and truncating it leaves the diagnosis without the fix.
+
 ## 5. Heartbeat
 
 ```

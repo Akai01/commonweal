@@ -115,6 +115,18 @@ inside the sealed payload, so the coordinator cannot otherwise tell a request th
 stopped naturally at 200 tokens from one capped at 200. Small, real, and stated here
 rather than discovered later. Nothing about *what* was generated is exposed by it.
 
+**That a request failed, and roughly why.** An `error` frame is unencrypted for the
+same structural reason the receipt is: it is emitted when the status code is already
+spent, and a client that never established a session key still has to be able to read
+it. So the coordinator learns that a request failed and sees a bounded diagnostic
+string — which may name an engine's HTTP status or say that a peer was unreachable.
+That is failure-class metadata, not content. It is bounded rather than trusted: every
+emitter sanitises the message to printable characters, collapsed whitespace and 400
+characters, because the text originates in an engine's error body or a peer's raw HTTP
+response and ends at an operator's terminal. Without that, a backend behind a gateway
+could write an ANSI escape into every member's terminal, and could put far more of a
+request's context in front of the coordinator than the receipt concedes.
+
 **Availability.** The coordinator is untrusted but not optional. It can go down or
 refuse to route. Failover is currently manual.
 

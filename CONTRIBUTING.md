@@ -13,7 +13,7 @@ documented design.
 
 ```bash
 python3 -m venv .venv && .venv/bin/pip install -e '.[dev]'
-.venv/bin/python -m pytest -q          # 211 tests, about 25 seconds
+.venv/bin/python -m pytest -q          # 214 tests, about 25 seconds
 ```
 
 Python 3.12 is the floor; CI runs 3.12 and 3.13. The suite needs no network, no

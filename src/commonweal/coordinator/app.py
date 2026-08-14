@@ -20,6 +20,7 @@ from ..proto import Envelope, ProtocolError
 from ..crypto import verify_envelope
 from ..replay import ReplayError, check_fresh
 from ..roster import Roster, RosterError
+from ..sanitise import sanitise_message
 from ..tlsconfig import DEFAULT_TLS, TLSConfig
 from .auth import AuthError, NonceCache, verify_signed_request
 from .registry import Registry
@@ -310,6 +311,11 @@ def create_app(coordinator: Coordinator) -> FastAPI:
 def _error_frame(request_id: str, message: str) -> str:
     import json
 
+    # A `RelayError` embeds up to 400 characters of the peer's raw HTTP response
+    # body, so this carries text the coordinator did not write to a terminal it
+    # does not control. Same rule as everywhere else that untrusted text is
+    # emitted -- see commonweal.sanitise.
     return json.dumps(
-        {"kind": "error", "v": 1, "request_id": request_id, "message": message}
+        {"kind": "error", "v": 1, "request_id": request_id,
+         "message": sanitise_message(message)}
     ) + "\n"
