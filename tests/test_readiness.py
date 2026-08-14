@@ -480,7 +480,9 @@ def test_detail_is_length_bounded():
 
 def test_detail_strips_control_characters_and_collapses_whitespace():
     reg = _registry()
-    reg.heartbeat("bob-ws", detail="broke\r\n\tat\x00 layer​ 7    now")
+    # The zero-width space is written as an escape on purpose: as a literal it is
+    # invisible, so the test would read as though it never covered the case.
+    reg.heartbeat("bob-ws", detail="broke\r\n\tat\x00 layer\u200b 7    now")
     assert reg.state("bob-ws").detail == "broke at layer 7 now"
 
 
