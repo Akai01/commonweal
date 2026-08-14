@@ -1,9 +1,9 @@
 """Concurrency measurement -- the number that decides what to build next.
 
-Open question Q1 in docs/ARCHITECTURE.md: **what concurrency does a real
-federation actually generate?** Every throughput argument for batching assumes
-sustained concurrent load. Six people do not generate B=32; they generate
-bursts of one to three with long idle gaps.
+The open question: **what concurrency does a real federation actually
+generate?** Every throughput argument for batching assumes sustained concurrent
+load. Six people do not generate B=32; they generate bursts of one to three
+with long idle gaps.
 
 If real load is 1-3 concurrent, batching buys almost nothing and the federation
 is an *access* play -- running a model none of you could alone -- rather than a
@@ -48,7 +48,7 @@ class ConcurrencyReport:
     span_hours: float
 
     def verdict(self) -> str:
-        """The plain-language answer to Q1.
+        """The plain-language answer to the question above.
 
         Deliberately opinionated: the point of the measurement is to make a
         build decision, so it states one rather than handing back statistics.
@@ -61,8 +61,8 @@ class ConcurrencyReport:
         if self.p95 <= 3:
             return (
                 f"LOW concurrency (p95={self.p95}). Batching buys little. Treat this "
-                "federation as an ACCESS play, not a throughput play, and deprioritise "
-                "Phase C."
+                "federation as an ACCESS play -- running a model no member could host "
+                "alone -- rather than a throughput play."
             )
         if self.p95 <= 8:
             return (

@@ -59,7 +59,7 @@ class Coordinator:
             queue_timeout=self.config.queue_timeout,
         )
         self.nonces = NonceCache()
-        # Q1 (docs/ARCHITECTURE.md): records from day one because the answer
+        # See measure.py: records from day one because the answer
         # needs weeks of wall clock and decides whether batching is worth
         # building at all.
         self.concurrency = concurrency or ConcurrencyLog()
@@ -141,7 +141,7 @@ def create_app(coordinator: Coordinator) -> FastAPI:
 
     @app.post("/v1/concurrency")
     async def concurrency(request: Request):
-        """Open question Q1: what concurrency does this federation generate?
+        """The open question: what concurrency does this federation generate?
 
         Batching is only worth building if the answer is high. Reported here
         rather than buried in a database so the decision can be made on data."""

@@ -50,7 +50,8 @@ def main(argv: list[str] | None = None) -> int:
                         help="highest roster version already held; rejects rollback")
     parser.add_argument("--ledger", default="commonweal-ledger.db")
     parser.add_argument("--concurrency-log", default="commonweal-concurrency.db",
-                        help="where to record Q1 concurrency samples")
+                        help="where to record observed concurrency samples, reported "
+                             "by /v1/concurrency")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8080)
     parser.add_argument("--max-queue", type=int, default=32)
