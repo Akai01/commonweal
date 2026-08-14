@@ -82,8 +82,13 @@ Before opening a PR:
 
 ```bash
 .venv/bin/python -m pytest -q
-ruff check src tests          # the repo has no ruff config, so defaults apply
+.venv/bin/ruff check src tests
 ```
+
+The lint rule set is pinned in `pyproject.toml` rather than left to ruff's
+defaults, which grow between releases — otherwise updating ruff would fail the
+gate on code nobody touched. If a new rule is worth adopting, adopt it in its own
+commit.
 
 ## Pull requests
 

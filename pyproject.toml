@@ -24,7 +24,10 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8.0", "pytest-asyncio>=0.23"]
+# ruff belongs here because CONTRIBUTING names `ruff check src tests` as the
+# pre-PR gate, and a gate a contributor has to install separately is one they
+# will meet for the first time in CI.
+dev = ["pytest>=8.0", "pytest-asyncio>=0.23", "ruff>=0.6"]
 # Optional on purpose: the OS keychain is the better home for a member's secret
 # keys, but peers and coordinators run on headless servers that have no keychain
 # at all. Requiring it would break the deployment this project is for.
@@ -41,3 +44,17 @@ where = ["src"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
+
+[tool.ruff]
+# Pinned rather than inherited, because ruff's *default* rule set grows between
+# releases: this tree is clean against the defaults it was written for, and a
+# later ruff reported dozens of findings on the same unchanged code, none of
+# them regressions. A gate that moves when a contributor's toolchain updates is
+# not a gate, so the set is stated here and widening it is a deliberate edit.
+line-length = 96
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F"]
+# E501 is deliberately absent. 96 columns is the soft limit CONTRIBUTING states,
+# and a handful of lines exceed it where breaking them would read worse -- which
+# is the judgement the style section asks for rather than one to automate away.
