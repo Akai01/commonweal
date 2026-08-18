@@ -54,8 +54,8 @@ python3 -m venv .venv && .venv/bin/pip install -e '.[dev]'
 **1 — Everyone makes an identity.** Send the printed public block to your admin.
 
 ```bash
-commonweal --identity alice.json keygen alice
-commonweal --identity bob.json   keygen bob
+commonweal --identity alice-identity.json keygen alice
+commonweal --identity bob-identity.json   keygen bob
 ```
 
 Secret keys are written to a `0600` file by default, and `keygen` says so. On a
@@ -66,9 +66,9 @@ the headless servers that run peers usually have no keychain.
 **2 — The admin builds and signs a roster.**
 
 ```bash
-commonweal --identity alice.json roster init my-lab --out roster.json
+commonweal --identity alice-identity.json roster init my-lab --out roster.json
 # add members + peers to roster.json, then:
-commonweal --identity alice.json roster sign roster.json
+commonweal --identity alice-identity.json roster sign roster.json
 # prints the admin key to distribute out of band
 ```
 
@@ -76,7 +76,7 @@ commonweal --identity alice.json roster sign roster.json
 
 ```bash
 commonweal-peer --roster roster.json --admin-key alice=<KEY> \
-                --identity bob.json --peer-id bob-ws \
+                --identity bob-identity.json --peer-id bob-ws \
                 --coordinator http://coord:8080 --resident-gb 62 --hw-class cpu \
                 --engine '{"kind":"openai","base_url":"http://localhost:11434/v1","model":"llama-3.1-8b"}'
 ```
@@ -101,7 +101,7 @@ Without them it serves plain HTTP and says so on startup.
 document names, so the coordinator cannot nominate a key of its own.
 
 ```bash
-commonweal --identity alice.json chat "hello" --model llama-3.1-8b \
+commonweal --identity alice-identity.json chat "hello" --model llama-3.1-8b \
            --roster roster.json --admin-key alice=<KEY> \
            --coordinator http://coord:8080
 ```
@@ -177,7 +177,7 @@ commonweal guarantees equivalence, not bit-identity, and stamps `engine`,
 | `src/commonweal/tlsconfig.py` | transport security for every hop |
 
 ```bash
-.venv/bin/python -m pytest -q     # 217 tests
+.venv/bin/python -m pytest -q     # 220 tests
 ```
 
 ## Docs

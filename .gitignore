@@ -12,8 +12,13 @@ dist/
 # SECRETS -- identity files contain Ed25519 and X25519 PRIVATE KEYS.
 # Never commit these; a leaked identity is full impersonation until the
 # roster is updated (see docs/THREAT-MODEL.md).
+#
+# `--identity` takes any path, so no pattern can cover every name someone
+# might choose. The docs therefore all use the `*-identity.json` form these
+# rules do catch, and `keygen` warns when it writes somewhere they do not.
 identity.json
 *identity.json
+*-identity.json
 *.pem
 *.key
 *.crt

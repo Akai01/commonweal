@@ -47,6 +47,45 @@ def _load_pinned_roster(args):
         return None, 1
 
 
+def _warn_if_git_would_commit(path: Path) -> None:
+    """Warn when an identity lands somewhere git is willing to commit it.
+
+    `--identity` takes any path, so `.gitignore` patterns cannot cover every
+    name a person might pick -- and the failure is silent and permanent: a
+    secret key pushed to a public remote is disclosed even if the next commit
+    removes it. Asking git directly is the only reliable check, and it is the
+    one moment we know the file was just created.
+
+    Stays quiet on any difficulty. Not being in a repository, or not having git
+    at all, is the normal case and not a problem to report.
+    """
+    import subprocess
+
+    where = path.parent if str(path.parent) else Path(".")
+    try:
+        inside = subprocess.run(
+            ["git", "rev-parse", "--is-inside-work-tree"],
+            cwd=where, capture_output=True, text=True, timeout=5,
+        )
+        if inside.returncode != 0 or inside.stdout.strip() != "true":
+            return
+        # check-ignore exits 0 when the path IS ignored.
+        if subprocess.run(
+            ["git", "check-ignore", "-q", str(path)], cwd=where, timeout=5
+        ).returncode == 0:
+            return
+    except (OSError, subprocess.SubprocessError):
+        return
+
+    print(
+        f"warning: {path} is inside a git repository and is NOT ignored. It holds "
+        f"private keys; committing it discloses them permanently, even if a later "
+        f"commit deletes it. Add it to .gitignore, or name it '*-identity.json', "
+        f"which this project's .gitignore already covers.",
+        file=sys.stderr,
+    )
+
+
 def _cmd_keygen(args) -> int:
     path = Path(args.identity)
     if path.exists() and not args.force:
@@ -72,6 +111,10 @@ def _cmd_keygen(args) -> int:
                  "no OS keychain is available on this machine")
         print(f"warning: the secret keys are in that file in the clear; {where}\n",
               file=sys.stderr)
+    # Both storage modes still write a file, and the public block in it is worth
+    # protecting from being rewritten -- so this check is not conditional on the
+    # secrets being on disk.
+    _warn_if_git_would_commit(path)
     print("Send this block to a federation admin to be added to the roster:\n")
     print(json.dumps(identity.public_entry(), indent=2))
     return 0

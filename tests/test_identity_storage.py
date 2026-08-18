@@ -214,3 +214,49 @@ def test_availability_is_false_when_keyring_is_not_installed(monkeypatch):
     monkeypatch.setitem(sys.modules, "keyring", None)   # import raises
     assert keymod.keyring_available() is False
 
+
+# --- not committing the thing you just generated -------------------------
+#
+# `--identity` takes any path, so no .gitignore pattern can cover every name
+# someone picks. The README's quickstart once told people to create `alice.json`
+# while the ignore rules only matched `*identity.json`, so following the
+# documentation produced a committable file full of private keys. A key pushed
+# to a public remote is disclosed permanently, and deleting it later does not
+# help. Hence a check at the one moment we know the file was just written.
+
+
+def _git_repo(tmp_path, gitignore: str):
+    import subprocess
+
+    subprocess.run(["git", "init", "-q", "."], cwd=tmp_path, check=True)
+    (tmp_path / ".gitignore").write_text(gitignore, encoding="utf-8")
+    return tmp_path
+
+
+def test_keygen_warns_when_the_identity_file_is_not_gitignored(tmp_path, capsys):
+    from commonweal.client.cli import main
+
+    repo = _git_repo(tmp_path, "*-identity.json\n")
+    assert main(["--identity", str(repo / "mykey.json"), "keygen", "carol"]) == 0
+
+    err = capsys.readouterr().err
+    assert "NOT ignored" in err
+    assert "mykey.json" in err
+
+
+def test_keygen_is_quiet_when_the_name_is_covered(tmp_path, capsys):
+    """The form the documentation uses must not produce a scary warning."""
+    from commonweal.client.cli import main
+
+    repo = _git_repo(tmp_path, "*-identity.json\n")
+    assert main(["--identity", str(repo / "carol-identity.json"), "keygen", "carol"]) == 0
+
+    assert "NOT ignored" not in capsys.readouterr().err
+
+
+def test_keygen_says_nothing_about_git_outside_a_repository(tmp_path, capsys):
+    """Most people run this in a home directory. Silence is the right answer."""
+    from commonweal.client.cli import main
+
+    assert main(["--identity", str(tmp_path / "mykey.json"), "keygen", "carol"]) == 0
+    assert "git" not in capsys.readouterr().err.lower()
