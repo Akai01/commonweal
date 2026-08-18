@@ -276,6 +276,23 @@ class CommonwealClient:
                             raise ClientError(str(exc)) from exc
                         expected_seq += 1
                         if chunk.final:
+                            # `final` is plaintext framing, outside the AEAD, so the
+                            # relay can set it on any chunk. What it cannot do is
+                            # produce an authenticated empty chunk at this position:
+                            # that needs the response key. So the emptiness of the
+                            # plaintext -- which IS authenticated -- is what makes a
+                            # final marker genuine, and PROTOCOL §4 requires it.
+                            #
+                            # Without this the bit alone ends the stream, and a relay
+                            # truncates any answer by flipping it: content already
+                            # delivered stays, the rest is dropped, and the client
+                            # reports success. Silently returning a short answer is
+                            # the failure this class raises TruncatedStream to avoid.
+                            if text:
+                                raise ClientError(
+                                    "final marker carried content; a relay forged "
+                                    "end-of-stream to truncate the answer"
+                                )
                             saw_final = True
                         elif text:
                             yield "text", text.decode("utf-8", "replace")

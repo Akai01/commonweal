@@ -9,11 +9,18 @@ claims the whole design rests on:
 
 from __future__ import annotations
 
+import json
 import secrets
 import time
 
 import httpx
 import pytest
+# Module scope on purpose: this file uses `from __future__ import annotations`, so
+# FastAPI resolves a handler's string annotations against module globals. A
+# `Request` imported inside a function is invisible there, and the parameter is
+# silently demoted to a query field -- which shows up as a 422 with an empty
+# error body rather than anything that names the cause.
+from fastapi import Request
 
 from commonweal.client import CommonwealClient, Identity as ClientIdentity
 from commonweal.coordinator import Coordinator, create_app as create_coordinator
@@ -224,7 +231,7 @@ class _LyingCoordinator:
         self.sealed_key_seen = None
 
     def app(self):
-        from fastapi import FastAPI, Request
+        from fastapi import FastAPI
         from fastapi.responses import JSONResponse
 
         app = FastAPI()
@@ -552,3 +559,189 @@ async def test_lease_redeems_exactly_once(federation):
     with pytest.raises(LeaseExpired, match="already redeemed"):
         scheduler.redeem(lease.request_id, "alice")
     scheduler.release(lease.request_id)
+
+
+# --- forging end-of-stream -------------------------------------------------
+#
+# `final` is plaintext framing: seal_chunk passes no associated data, so the bit
+# is outside the AEAD and any relay can set it. For a while that was enough to
+# end a stream, so a coordinator truncated any answer by flipping one boolean --
+# content already delivered stayed, the rest was dropped, and the client
+# reported success. The receipt is unencrypted too, so the same relay rewrote
+# the token count and `finish_reason`, leaving `Completion.truncated` False and
+# the CLI's capped-answer warning unable to fire.
+#
+# What a relay cannot forge is an *authenticated empty chunk* at a given
+# position; that needs the response key. So emptiness is what makes a final
+# marker genuine, and PROTOCOL §4 already required it.
+
+
+async def _mangling_relay(peer_url: str, mangle):
+    """A coordinator that relays a real peer's stream through `mangle`."""
+    from fastapi import FastAPI
+    from fastapi.responses import JSONResponse, StreamingResponse
+
+    app = FastAPI()
+
+    @app.post("/v1/lease")
+    async def _lease():
+        return JSONResponse({
+            "request_id": "r1", "peer_id": "bob-ws", "peer_enc_pub": app.state.enc_pub,
+            "peer_endpoint": peer_url, "model": "mock-1b", "engine": "mock",
+            "engine_version": "0", "hw_class": "test", "expires_at": time.time() + 300,
+        })
+
+    @app.post("/v1/infer")
+    async def _infer(request: Request):
+        body = await request.json()
+        async with httpx.AsyncClient(timeout=10) as c:
+            resp = await c.post(f"{peer_url}/infer", json=body)
+        frames = [json.loads(x) for x in resp.text.splitlines() if x.strip()]
+
+        async def out():
+            for f in mangle(frames):
+                yield json.dumps(f) + "\n"
+
+        return StreamingResponse(out(), media_type="application/x-ndjson")
+
+    return app
+
+
+async def _run_against(mangle, federation_parts):
+    alice, bob, peer, peer_port = federation_parts
+    async with serve(create_peer(peer), peer_port) as peer_url:
+        app = await _mangling_relay(peer_url, mangle)
+        app.state.enc_pub = bob.enc_pub
+        port = free_port()
+        async with serve(app, port) as coord_url:
+            doc = build_roster(
+                {"alice": alice, "bob": bob}, admins=["alice"],
+                peers=[{
+                    "id": "bob-ws", "owner": "bob", "enc_pub": bob.enc_pub,
+                    "endpoint": peer_url, "model": "mock-1b", "engine": "mock",
+                    "engine_version": "0", "hw_class": "test",
+                    "capacity_gb": 8.0, "max_concurrent": 2,
+                }],
+            )
+            roster = Roster.load(doc, trusted_admin_keys={"alice": alice.sign_pub})
+            ident = ClientIdentity(
+                member_id="alice", sign_seed=bytes(alice.signing_key),
+                sign_pub=bytes(alice.signing_key.verify_key),
+                enc_priv=alice.enc_priv, enc_pub=b"",
+            )
+            client = CommonwealClient(coord_url, ident, roster=roster, timeout=10.0)
+            return await client.complete(
+                [{"role": "user", "content": "hello"}], model="mock-1b"
+            )
+
+
+@pytest.fixture
+def parts():
+    alice, bob = Identity("alice"), Identity("bob")
+    peer_port = free_port()
+    doc = build_roster(
+        {"alice": alice, "bob": bob}, admins=["alice"],
+        peers=[{
+            "id": "bob-ws", "owner": "bob", "enc_pub": bob.enc_pub,
+            "endpoint": f"http://127.0.0.1:{peer_port}", "model": "mock-1b",
+            "engine": "mock", "engine_version": "0", "hw_class": "test",
+            "capacity_gb": 8.0, "max_concurrent": 2,
+        }],
+    )
+    roster = Roster.load(doc, trusted_admin_keys={"alice": alice.sign_pub})
+    peer = Peer(PeerConfig(peer_id="bob-ws", hw_class="test"), roster,
+                MockEngine(), bob.enc_priv)
+    return alice, bob, peer, peer_port
+
+
+async def test_an_honest_relay_still_delivers_the_whole_answer(parts):
+    """Control. Without it, the tests below could pass by breaking everything."""
+    result = await _run_against(lambda f: f, parts)
+    assert result.text == await _expected_mock_output("hello")
+
+
+async def test_a_relay_cannot_end_the_stream_by_flipping_the_final_bit(parts):
+    """Flip `final` on the first content chunk and drop the rest."""
+    def mangle(frames):
+        first = dict(frames[0], final=True)
+        receipt = [f for f in frames if f.get("kind") == "receipt"]
+        return [first, *receipt]
+
+    with pytest.raises(Exception, match="forged end-of-stream"):
+        await _run_against(mangle, parts)
+
+
+async def test_a_relay_cannot_truncate_mid_answer_by_flipping_the_final_bit(parts):
+    """The subtler shape: let some text through, then forge the end.
+
+    Worse than an empty answer, because a partial one looks finished.
+    """
+    def mangle(frames):
+        chunks = [f for f in frames if f.get("kind") == "chunk"]
+        receipt = [f for f in frames if f.get("kind") == "receipt"]
+        return [*chunks[:2], dict(chunks[2], final=True), *receipt]
+
+    with pytest.raises(Exception, match="forged end-of-stream"):
+        await _run_against(mangle, parts)
+
+
+async def test_dropping_the_tail_without_the_bit_still_raises_truncated(parts):
+    """The documented defence, which had no test and must keep working.
+
+    This is what makes the two above meaningful: the relay's only alternative to
+    forging the marker is dropping it, and that has always been caught.
+    """
+    from commonweal.client.client import TruncatedStream
+
+    def mangle(frames):
+        return [f for f in frames if f.get("kind") == "chunk"][:2]
+
+    with pytest.raises(TruncatedStream):
+        await _run_against(mangle, parts)
+
+
+async def test_the_peer_never_emits_an_empty_chunk_before_the_final_one():
+    """The client's forged-marker check rests on an invariant the peer must keep.
+
+    Emptiness is what distinguishes a genuine end-of-stream from a flipped bit,
+    so an authenticated empty chunk anywhere else would be a marker a relay
+    could point `final` at and truncate the answer. The shipped adapters never
+    yield an empty string, but `Engine` is a public protocol and a third-party
+    one might, so the peer drops them rather than trusting every engine to.
+    """
+    class GappyEngine:
+        name, version, model = "gappy", "0", "mock-1b"
+
+        async def health(self):
+            return True
+
+        async def stream(self, messages, params):
+            for piece in ("alpha ", "", "beta ", "", ""):
+                yield piece
+
+    alice, bob = Identity("alice"), Identity("bob")
+    peer_port = free_port()
+    entry = {
+        "id": "bob-ws", "owner": "bob", "enc_pub": bob.enc_pub,
+        "endpoint": f"http://127.0.0.1:{peer_port}", "model": "mock-1b",
+        "engine": "mock", "engine_version": "0", "hw_class": "test",
+        "capacity_gb": 8.0, "max_concurrent": 2,
+    }
+    doc = build_roster({"alice": alice, "bob": bob}, admins=["alice"], peers=[entry])
+    roster = Roster.load(doc, trusted_admin_keys={"alice": alice.sign_pub})
+    peer = Peer(PeerConfig(peer_id="bob-ws", hw_class="test"), roster,
+                GappyEngine(), bob.enc_priv)
+
+    captured = {}
+
+    def capture(frames):
+        captured["chunks"] = [f for f in frames if f.get("kind") == "chunk"]
+        return frames
+
+    result = await _run_against(capture, (alice, bob, peer, peer_port))
+
+    assert result.text == "alpha beta "
+    chunks = captured["chunks"]
+    assert [c["final"] for c in chunks] == [False, False, True], (
+        "the engine's three empty yields must not become chunks of their own"
+    )

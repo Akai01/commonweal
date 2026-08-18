@@ -260,6 +260,16 @@ def create_app(peer: Peer) -> FastAPI:
                     if isinstance(item, Usage):
                         reported = item
                         continue
+                    if not item:
+                        # Empty plaintext is what marks end-of-stream, and the client
+                        # relies on that to tell a genuine final marker from one a
+                        # relay forged by flipping the (unauthenticated) `final` bit.
+                        # The shipped adapters never yield an empty string, but the
+                        # Engine protocol is public and a third-party one might --
+                        # which would hand a relay an authenticated empty chunk to
+                        # point the bit at. Cheaper to keep the invariant here than
+                        # to depend on every engine's restraint.
+                        continue
                     produced += len(item)
                     peer.note_progress()
                     yield json.dumps(

@@ -188,6 +188,19 @@ plausible.
 The last chunk has `"final": true` and empty plaintext. **A stream ending without it
 was truncated** — clients must raise, not return a short answer.
 
+The empty plaintext is not decoration, and a client must check it. `final` sits outside
+the AEAD — `seal_chunk` passes no associated data — so any relay can set the bit on a
+chunk it forwards. What a relay cannot produce is an authenticated empty chunk at a
+given sequence number, because the nonce is derived from `seq` and the ciphertext needs
+`k_resp`. So emptiness is what makes a marker genuine: **a client receiving a `final`
+chunk whose plaintext is non-empty must treat the stream as forged**, not as finished.
+Otherwise a relay truncates any answer by flipping one boolean, delivering what it
+likes and reporting success — and since the receipt is unencrypted it can restate the
+token count to match, leaving nothing for the caller to notice.
+
+Peers must therefore never emit an empty non-final chunk, or they hand a relay a
+marker to point the bit at.
+
 **Receipt** — trailing, **not encrypted**. The coordinator must read counts to run the
 ledger. It learns *how much*, never *what*.
 

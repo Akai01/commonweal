@@ -31,7 +31,7 @@ compute — a matmul on ciphertext is not a matmul.
 | Replayed control requests | nonce cache + timestamp window (120 s, 30 s skew grace) |
 | Replayed sealed envelopes | `ts` is inside the envelope's signed bytes; the peer refuses stale envelopes and remembers seen `request_id`s, and a lease redeems exactly once at the coordinator |
 | Reordered / replayed response chunks | counter-derived nonces; wrong position fails authentication |
-| Truncated responses | explicit final marker; its absence raises `TruncatedStream` |
+| Truncated responses, including a relay forging end-of-stream | the final marker is an authenticated **empty** chunk, not the `final` bit — that bit is plaintext framing and any relay can set it, so the client refuses a final marker carrying content and raises `TruncatedStream` when none arrives |
 | Roster forgery | admin keys pinned locally, never read from the document |
 | Roster rollback | version must strictly increase |
 | Cross-member lease theft | leases bound to the member they were issued to |
