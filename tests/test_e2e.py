@@ -48,6 +48,16 @@ class Federation:
         self.alice = alice
         self.bob = bob
 
+    @property
+    def roster(self):
+        """The same signed document a real member would have pinned at join time.
+
+        Read off the coordinator only because this harness builds one roster and
+        hands it to everybody; a real client loads its own copy from disk and
+        verifies it against admin keys it pinned out of band.
+        """
+        return self.coordinator.roster
+
     def client(self) -> CommonwealClient:
         ident = ClientIdentity(
             member_id="alice",
@@ -56,7 +66,7 @@ class Federation:
             enc_priv=self.alice.enc_priv,
             enc_pub=b"",
         )
-        return CommonwealClient(self.coordinator_url, ident, timeout=30.0)
+        return CommonwealClient(self.coordinator_url, ident, roster=self.roster, timeout=30.0)
 
     async def heartbeat(self, resident_gb: float = 62.0) -> None:
         doc = sign_request(
@@ -188,6 +198,136 @@ async def test_coordinator_cannot_decrypt(federation):
     assert "sign_seed" not in repr(doc)
 
 
+# --- an ACTIVE coordinator, which is the interesting case ------------------
+#
+# The test above only shows an honest coordinator object stores no key. It says
+# nothing about whether a dishonest one can acquire the means to read a request,
+# and for a long time it could: the client sealed to whatever `peer_enc_pub` the
+# lease response carried, so a coordinator that answered with its own X25519
+# public key was handed the master secret. Every signature, nonce and sequence
+# check still passed, because they protect a session whose key the coordinator
+# had chosen. The prompt decrypted and forged reply chunks authenticated.
+#
+# These three pin the fix: the lease says which peer, the roster says which key.
+
+
+class _LyingCoordinator:
+    """A coordinator that answers /v1/lease with whatever we tell it to.
+
+    Deliberately not the real Coordinator with a tweak -- the threat is a
+    coordinator running code its members never saw, so the test should not
+    inherit any of the honest implementation's restraint.
+    """
+
+    def __init__(self, lease: dict):
+        self.lease = lease
+        self.sealed_key_seen = None
+
+    def app(self):
+        from fastapi import FastAPI, Request
+        from fastapi.responses import JSONResponse
+
+        app = FastAPI()
+
+        @app.post("/v1/lease")
+        async def _lease():
+            return JSONResponse(self.lease)
+
+        @app.post("/v1/infer")
+        async def _infer(request: Request):
+            # Reached only if the client sealed something, which is the failure.
+            self.sealed_key_seen = (await request.json()).get("sealed_key")
+            return JSONResponse({"error": {"code": "x", "message": "x"}}, status_code=500)
+
+        return app
+
+
+async def _lying_federation(lease_overrides: dict):
+    """A client pointed at a coordinator that lies in its lease response."""
+    from commonweal.proto import b64
+    from nacl.public import PrivateKey
+
+    alice, bob = Identity("alice"), Identity("bob")
+    peer_port = free_port()
+    entry = {
+        "id": "bob-ws", "owner": "bob", "enc_pub": bob.enc_pub,
+        "endpoint": f"http://127.0.0.1:{peer_port}", "model": "mock-1b",
+        "engine": "mock", "engine_version": "0", "hw_class": "test",
+        "capacity_gb": 8.0, "max_concurrent": 2,
+    }
+    doc = build_roster({"alice": alice, "bob": bob}, admins=["alice"], peers=[entry])
+    roster = Roster.load(doc, trusted_admin_keys={"alice": alice.sign_pub})
+
+    honest = {
+        "request_id": "r1", "peer_id": "bob-ws", "peer_enc_pub": bob.enc_pub,
+        "peer_endpoint": f"http://127.0.0.1:{peer_port}", "model": "mock-1b",
+        "engine": "mock", "engine_version": "0", "hw_class": "test",
+        "expires_at": time.time() + 300,
+    }
+    liar = _LyingCoordinator({**honest, **lease_overrides})
+    ident = ClientIdentity(
+        member_id="alice", sign_seed=bytes(alice.signing_key),
+        sign_pub=bytes(alice.signing_key.verify_key),
+        enc_priv=alice.enc_priv, enc_pub=b"",
+    )
+    return liar, roster, ident, b64(bytes(PrivateKey.generate().public_key))
+
+
+async def test_client_refuses_a_coordinator_substituted_peer_key():
+    """The attack itself: the coordinator offers its OWN encryption key.
+
+    If the client seals to it, the coordinator recovers the master secret and
+    reads the prompt -- so the request must never leave the client at all.
+    """
+    liar, roster, ident, evil_pub = await _lying_federation({})
+    liar.lease["peer_enc_pub"] = evil_pub          # the coordinator's own key
+
+    port = free_port()
+    async with serve(liar.app(), port) as url:
+        client = CommonwealClient(url, ident, roster=roster, timeout=10.0)
+        with pytest.raises(Exception, match="roster does not list"):
+            await client.complete([{"role": "user", "content": "secret"}], model="mock-1b")
+
+    assert liar.sealed_key_seen is None, "the client sealed and sent it anyway"
+
+
+async def test_client_refuses_a_peer_that_is_not_on_the_roster():
+    """A coordinator may choose among the peers an admin signed for, and no others.
+
+    Otherwise it names a machine the client has no key for and no reason to
+    trust, and 'which peer served this' stops meaning anything.
+    """
+    liar, roster, ident, _ = await _lying_federation({"peer_id": "ghost-ws"})
+
+    port = free_port()
+    async with serve(liar.app(), port) as url:
+        client = CommonwealClient(url, ident, roster=roster, timeout=10.0)
+        with pytest.raises(Exception, match="not on the roster"):
+            await client.complete([{"role": "user", "content": "hi"}], model="mock-1b")
+
+    assert liar.sealed_key_seen is None
+
+
+async def test_client_refuses_a_peer_the_roster_says_serves_another_model():
+    """Routing is also the coordinator's word, and provenance depends on it.
+
+    A coordinator that answers a request for one model from a peer running
+    another makes the `engine`/`model` stamp on the reply a false one, which is
+    exactly the equivalence claim ARCHITECTURE §9 makes.
+    """
+    liar, roster, ident, _ = await _lying_federation({"model": "some-other-model"})
+
+    port = free_port()
+    async with serve(liar.app(), port) as url:
+        client = CommonwealClient(url, ident, roster=roster, timeout=10.0)
+        with pytest.raises(Exception, match="serves 'mock-1b'"):
+            await client.complete(
+                [{"role": "user", "content": "hi"}], model="some-other-model"
+            )
+
+    assert liar.sealed_key_seen is None
+
+
 async def test_prompt_never_appears_in_coordinator_traffic(federation):
     """Relay a request whose prompt is a unique marker, then assert the marker
     never appears in what the coordinator forwards."""
@@ -261,7 +401,9 @@ async def test_non_member_refused(federation):
         enc_priv=stranger.enc_priv,
         enc_pub=b"",
     )
-    client = CommonwealClient(federation.coordinator_url, ident, timeout=10.0)
+    client = CommonwealClient(
+        federation.coordinator_url, ident, roster=federation.roster, timeout=10.0
+    )
     with pytest.raises(Exception, match="unauthorized|unknown member"):
         await client.complete([{"role": "user", "content": "let me in"}], model="mock-1b")
 

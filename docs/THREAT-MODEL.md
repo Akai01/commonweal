@@ -24,7 +24,7 @@ compute — a matmul on ciphertext is not a matmul.
 | Passive network observers (content) | payload sealed with X25519 + AES-256-GCM, independent of transport |
 | Passive observers (control plane) | TLS on every hop — `--tls-cert/--tls-key` inbound, `--ca-bundle` outbound |
 | Rogue server impersonation | certificates verified against a pinned CA; asserted by `test_untrusted_certificate_is_refused` |
-| **The coordinator** | relays sealed bytes; holds no decryption key. Asserted by `test_coordinator_cannot_decrypt` |
+| **The coordinator**, including one actively lying | relays sealed bytes; holds no decryption key, **and cannot nominate one** — the client seals to the key the signed roster names for the assigned peer, not to the key the lease response carries. Asserted by `test_coordinator_cannot_decrypt` and `test_client_refuses_a_coordinator_substituted_peer_key` |
 | Tampering in transit | AES-GCM tag → hard abort, never partial delivery |
 | Non-members submitting work | Ed25519 signature checked against the signed roster |
 | Non-members reading the federation's metadata *from the coordinator* | `/v1/roster`, `/v1/stats` and `/v1/concurrency` require a member signature; only `/v1/health` is open. This is the coordinator only — see the peer `/health` entry below |
@@ -36,6 +36,29 @@ compute — a matmul on ciphertext is not a matmul.
 | Roster rollback | version must strictly increase |
 | Cross-member lease theft | leases bound to the member they were issued to |
 | One peer reading another's traffic | request sealed to the assigned peer alone (two-round lease) |
+| A coordinator routing to a peer that is not on the roster, or one serving a different model | the client resolves the lease's `peer_id` in its own pinned roster and refuses a lease that names an unknown peer or the wrong model |
+
+### Why the client needs its own roster
+
+The coordinator row above is the load-bearing one, and it depends on an
+operational requirement worth stating on its own: **a client verifies peer keys
+against a roster it holds, exactly as peers and coordinators do.** `commonweal
+chat` therefore requires `--roster` and `--admin-key`, and `CommonwealClient`
+takes a `Roster`. Neither is optional.
+
+The reason is that "the coordinator holds no key" is not by itself enough. A
+coordinator that holds no key can still *choose* one: answer the lease with its
+own X25519 public key, and the client seals the master secret where the
+coordinator can open it. Nothing downstream notices, because every signature,
+nonce and sequence check still passes — they authenticate a session, and the
+coordinator picked the session key. The prompt decrypts and forged reply chunks
+verify.
+
+So the lease says *which peer*; the roster says *which key*. The client refuses
+a lease whose key disagrees with the signed document rather than reconciling
+them, because the only reason for the two to differ is that someone is lying.
+This is the same rule that makes admin keys trustworthy — pinned out of band,
+never taken from the party being checked.
 
 ## NOT protected against — state this to users
 

@@ -33,7 +33,7 @@ cryptography. It is **not** a blockchain, a volunteer network, or a marketplace
    ┌──────────┐  1. lease (signed)           ┌───────────────────────┐
    │  CLIENT  │ ───────────────────────────► │  COORDINATOR          │
    │ (member) │ ◄─────────────────────────── │  UNTRUSTED            │
-   │          │  2. {peer, its public key}   │  · roster + registry  │
+   │          │  2. peer id; key from roster │  · roster + registry  │
    │          │                              │  · admission + queue  │
    │          │  3. sealed to THAT peer      │  · fair-share sched   │
    │          │ ═══════════════════════════► │  · ledger             │
@@ -77,20 +77,31 @@ A request takes two rounds. The point of the split is least privilege.
 1. **Lease.** The client sends a signed request to `POST /v1/lease`. The
    coordinator authenticates it against the roster, applies fair-share
    admission (queuing if the pool is saturated), assigns a live peer, and
-   returns that peer's public key and a `request_id`.
-2. **Infer.** The client seals the prompt **to the assigned peer alone** and
+   returns that peer's id, its public key, and a `request_id`.
+2. **Resolve.** The client looks the assigned `peer_id` up in **its own pinned
+   roster** and takes the encryption key from there. A lease naming a peer the
+   roster does not list, offering a key the roster does not list for it, or
+   serving a different model, is refused outright.
+3. **Infer.** The client seals the prompt **to the assigned peer alone** and
    posts the envelope to `POST /v1/infer`. The coordinator verifies the sender's
    signature, redeems the lease exactly once, and relays the opaque envelope to
    the peer.
-3. **Serve.** The peer verifies the sender, refuses replays, unseals, calls its
+4. **Serve.** The peer verifies the sender, refuses replays, unseals, calls its
    engine, and streams back a sequence of independently-authenticated ciphertext
    chunks plus a trailing usage receipt.
-4. **Meter.** The coordinator reads the (unencrypted) receipt to record token
+5. **Meter.** The coordinator reads the (unencrypted) receipt to record token
    counts in the ledger, then releases the peer's slot.
 
 The alternative — a shared pool key every peer holds — would let any peer
 decrypt any request. The extra round trip costs about a millisecond against
 multi-second inference; least privilege is worth far more than that.
+
+Step 2 is what keeps step 1 from mattering more than it should. The coordinator
+decides *which* peer serves a request — that is its job, and it needs the
+freedom to schedule. It does not decide *who can read* the request: a
+coordinator that could name the recipient key would simply name its own, and
+the sealing, signing and nonce machinery would all keep working while it read
+every prompt. Routing is the coordinator's; key material is the roster's.
 
 ## 5. Cryptography
 

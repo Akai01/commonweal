@@ -16,7 +16,7 @@ commonweal speaks OpenAI-compatible HTTP to whatever each member runs
    ┌──────────┐  1. lease (signed)           ┌───────────────────────┐
    │  CLIENT  │ ───────────────────────────► │  COORDINATOR          │
    │ (member) │ ◄─────────────────────────── │  UNTRUSTED            │
-   │          │  2. {peer, its public key}   │  · roster + registry  │
+   │          │  2. peer id; key from roster │  · roster + registry  │
    │          │                              │  · admission + queue  │
    │          │  3. sealed to THAT peer      │  · fair-share sched   │
    │          │ ═══════════════════════════► │  · ledger             │
@@ -97,10 +97,13 @@ Every component takes `--tls-cert/--tls-key` (inbound) and
 `--ca-bundle/--client-cert/--client-key` (outbound, including mutual TLS).
 Without them it serves plain HTTP and says so on startup.
 
-**5 — Use it.**
+**5 — Use it.** The client needs the roster too: it seals to the peer key that
+document names, so the coordinator cannot nominate a key of its own.
 
 ```bash
-commonweal --identity alice.json chat "hello" --model llama-3.1-8b --coordinator http://coord:8080
+commonweal --identity alice.json chat "hello" --model llama-3.1-8b \
+           --roster roster.json --admin-key alice=<KEY> \
+           --coordinator http://coord:8080
 ```
 
 Develop against `--engine '{"kind":"mock"}'` — the whole federation is
@@ -108,15 +111,25 @@ exercisable in milliseconds without downloading a model.
 
 ## Design decisions worth knowing
 
-**Two-round leases.** The client asks for a lease, learns which peer it got *and
-that peer's public key*, then seals the request to that peer alone. A shared
-pool key would let every peer decrypt every request. The extra round trip costs
-about a millisecond against multi-second inference.
+**Two-round leases.** The client asks for a lease, learns which peer it got,
+then seals the request to that peer alone. A shared pool key would let every
+peer decrypt every request. The extra round trip costs about a millisecond
+against multi-second inference.
 
-**The coordinator holds no key.** It relays sealed bytes and meters usage. It
-learns *how much* was generated, never *what* — token counts arrive in a clear
-trailing receipt frame, an explicit trade documented in the threat model.
-`tests/test_e2e.py::test_coordinator_cannot_decrypt` asserts the property.
+**The lease says which peer; the roster says which key.** The client looks the
+assigned `peer_id` up in its own pinned roster and seals to the key *that*
+document names — never to the key the lease response carries. This is what
+makes the line below true against a coordinator that lies rather than only one
+that snoops: a coordinator free to nominate the recipient key could answer with
+its own, and then every signature and nonce check still passes while it reads
+the prompt. So `commonweal chat` takes `--roster` and `--admin-key`, exactly as
+peers and coordinators do.
+
+**The coordinator holds no key, and cannot choose one.** It relays sealed bytes
+and meters usage. It learns *how much* was generated, never *what* — token
+counts arrive in a clear trailing receipt frame, an explicit trade documented in
+the threat model. `test_coordinator_cannot_decrypt` and
+`test_client_refuses_a_coordinator_substituted_peer_key` assert the two halves.
 
 **Sealed, replay-proof envelopes.** Requests are sealed with an X25519 sealed
 box over AES-256-GCM; response chunks carry counter-derived nonces, so a
@@ -164,7 +177,7 @@ commonweal guarantees equivalence, not bit-identity, and stamps `engine`,
 | `src/commonweal/tlsconfig.py` | transport security for every hop |
 
 ```bash
-.venv/bin/python -m pytest -q     # 214 tests
+.venv/bin/python -m pytest -q     # 217 tests
 ```
 
 ## Docs

@@ -1,10 +1,25 @@
 """The two-round client flow.
 
-    1. lease  -- ask the coordinator for a peer; learn its public key
+    1. lease  -- ask the coordinator which peer to use
     2. infer  -- seal to that peer alone, relay through the coordinator
 
 The client is the only component that holds both the plaintext prompt and the
 master secret. The coordinator sees neither.
+
+**The lease says which peer, the roster says which key.** The coordinator is
+untrusted, so nothing it returns may decide who can open a request. A client
+that sealed to the `peer_enc_pub` in a lease response would be handing the
+coordinator the choice of recipient: answer with your own X25519 public key and
+you are handed the master secret, from which the prompt decrypts and forged
+response chunks authenticate. The client cannot detect it -- every signature,
+nonce and sequence check still passes, because they all protect a session whose
+key the coordinator chose.
+
+So the roster is the authority here, as it is everywhere else. The client pins
+admin keys out of band exactly as peers and coordinators do, resolves
+`peer_id` in that signed document, and seals to the key the *roster* names. A
+lease that disagrees with it is refused rather than reconciled: the only reason
+for the two to differ is that someone is lying about it.
 """
 
 from __future__ import annotations
@@ -20,6 +35,7 @@ import httpx
 from ..coordinator.auth import sign_request
 from ..crypto import SealError, seal_request, sign_envelope, unseal_chunk
 from ..proto import KIND_CHUNK, KIND_RECEIPT, Chunk, Receipt, unb64
+from ..roster import Roster, RosterError
 from ..tlsconfig import DEFAULT_TLS, TLSConfig
 from .keys import Identity
 
@@ -69,13 +85,67 @@ class CommonwealClient:
         coordinator_url: str,
         identity: Identity,
         *,
+        roster: Roster,
         timeout: float = 300.0,
         tls: TLSConfig = DEFAULT_TLS,
     ):
+        """`roster` is required, and is the point of this class being safe.
+
+        Not optional-with-a-warning, the way TLS is. A missing certificate
+        degrades a property the threat model already describes as degraded
+        without one; a missing roster would silently void the claim the whole
+        architecture rests on, and the caller would have no way to notice. If
+        you are a member you already hold a roster and the admin keys to verify
+        it -- that hand-off *is* the act of joining.
+        """
         self.coordinator_url = coordinator_url.rstrip("/")
         self.identity = identity
+        self.roster = roster
         self.timeout = timeout
         self.tls = tls
+
+    def _recipient(self, granted: dict, model: str) -> bytes:
+        """The X25519 key to seal to, taken from the roster and not the lease.
+
+        Returns the roster's key rather than the lease's even though it has just
+        checked they match: if the two ever diverge for a reason this method
+        fails to anticipate, the sealed request should still be openable only by
+        the machine an admin vouched for.
+        """
+        peer_id = granted.get("peer_id")
+        if not isinstance(peer_id, str) or not peer_id:
+            raise ClientError("lease response carries no peer_id")
+        try:
+            peer = self.roster.peer(peer_id)
+        except RosterError as exc:
+            # The coordinator picks a peer, but only from the set an admin
+            # signed for. Anything else is a peer we have no key for and no
+            # reason to trust.
+            raise ClientError(
+                f"coordinator assigned {peer_id!r}, which is not on the roster: {exc}"
+            ) from exc
+
+        offered = granted.get("peer_enc_pub")
+        try:
+            offered_bytes = unb64(offered) if isinstance(offered, str) else b""
+        except (ValueError, TypeError):
+            offered_bytes = b""
+        if offered_bytes != peer.enc_pub_bytes:
+            raise ClientError(
+                f"coordinator offered a public key for peer {peer_id!r} that the roster "
+                f"does not list for it. Refusing to seal: a coordinator that substitutes "
+                f"its own key reads the request. Check that your roster is current."
+            )
+
+        # The lease also names the model, and routing on the coordinator's word
+        # alone would let it answer a request for one model from a peer running
+        # another -- which makes the provenance stamped on the reply false.
+        if peer.model != model:
+            raise ClientError(
+                f"coordinator assigned peer {peer_id!r}, which the roster says serves "
+                f"{peer.model!r}, for a request for {model!r}"
+            )
+        return peer.enc_pub_bytes
 
     async def lease(self, model: str, *, client: httpx.AsyncClient) -> dict:
         doc = sign_request(
@@ -155,6 +225,9 @@ class CommonwealClient:
         """
         async with httpx.AsyncClient(timeout=self.timeout, **self.tls.httpx_kwargs()) as client:
             granted = await self.lease(model, client=client)
+            # Before anything is sealed: the coordinator chose the peer, the
+            # roster decides its key. Raises rather than falling back.
+            recipient = self._recipient(granted, model)
             yield "peer", granted["peer_id"]
 
             payload = json.dumps({
@@ -167,7 +240,7 @@ class CommonwealClient:
 
             envelope, master = seal_request(
                 payload,
-                unb64(granted["peer_enc_pub"]),
+                recipient,
                 request_id=granted["request_id"],
                 sender=self.identity.member_id,
             )

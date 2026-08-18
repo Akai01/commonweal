@@ -45,7 +45,7 @@ async def _build(*, engine=None, max_concurrent=2, peer_up=True):
     return alice, bob, peer, peer_port, coordinator, coord_port
 
 
-def _client(coord_url, ident: Identity, member_id="alice") -> CommonwealClient:
+def _client(coord_url, ident: Identity, roster, member_id="alice") -> CommonwealClient:
     return CommonwealClient(
         coord_url,
         ClientIdentity(
@@ -54,6 +54,7 @@ def _client(coord_url, ident: Identity, member_id="alice") -> CommonwealClient:
             sign_pub=bytes(ident.signing_key.verify_key),
             enc_priv=ident.enc_priv, enc_pub=b"",
         ),
+        roster=roster,
         timeout=30.0,
     )
 
@@ -78,7 +79,7 @@ async def test_client_disconnect_releases_slot():
     async with serve(create_peer(peer), pport):
         async with serve(create_coordinator(coordinator), cport) as coord_url:
             await _beat(coord_url, bob)
-            client = _client(coord_url, alice)
+            client = _client(coord_url, alice, coordinator.roster)
 
             # Take the first chunk, then walk away.
             agen = client.stream([{"role": "user", "content": "long"}], model="mock-1b")
@@ -103,7 +104,7 @@ async def test_capacity_recovers_after_repeated_disconnects():
     async with serve(create_peer(peer), pport):
         async with serve(create_coordinator(coordinator), cport) as coord_url:
             await _beat(coord_url, bob)
-            client = _client(coord_url, alice)
+            client = _client(coord_url, alice, coordinator.roster)
 
             for _ in range(3):
                 agen = client.stream([{"role": "user", "content": "x"}], model="mock-1b")
@@ -127,7 +128,7 @@ async def test_dead_peer_marked_unhealthy_and_slot_released():
     alice, bob, peer, pport, coordinator, cport = await _build()
     async with serve(create_coordinator(coordinator), cport) as coord_url:
         await _beat(coord_url, bob)  # claims live; peer server was never started
-        client = _client(coord_url, alice)
+        client = _client(coord_url, alice, coordinator.roster)
 
         with pytest.raises(Exception):
             await client.complete([{"role": "user", "content": "hi"}], model="mock-1b")
@@ -203,7 +204,7 @@ async def test_engine_that_cannot_serve_stops_receiving_traffic():
 
             assert coordinator.registry.is_live("bob-ws") is False
             with pytest.raises(Exception, match="no_capacity|no live peer"):
-                await _client(coord_url, alice).complete(
+                await _client(coord_url, alice, coordinator.roster).complete(
                     [{"role": "user", "content": "hi"}], model="mock-1b"
                 )
 
@@ -231,7 +232,7 @@ async def test_usage_without_counts_still_bills_via_the_estimator():
     async with serve(create_peer(peer), pport):
         async with serve(create_coordinator(coordinator), cport) as coord_url:
             await _beat(coord_url, bob)
-            result = await _client(coord_url, alice).complete(
+            result = await _client(coord_url, alice, coordinator.roster).complete(
                 [{"role": "user", "content": "hi"}], model="mock-1b"
             )
     assert result.text == "twelve chars"
@@ -260,7 +261,7 @@ async def test_engine_failure_surfaces_as_client_error():
     async with serve(create_peer(peer), pport):
         async with serve(create_coordinator(coordinator), cport) as coord_url:
             await _beat(coord_url, bob)
-            client = _client(coord_url, alice)
+            client = _client(coord_url, alice, coordinator.roster)
             with pytest.raises(Exception, match="exploded"):
                 await client.complete([{"role": "user", "content": "hi"}], model="mock-1b")
             assert coordinator.registry.state("bob-ws").in_flight == 0
@@ -302,7 +303,7 @@ async def test_engine_error_text_is_sanitised_before_it_leaves_the_peer():
     async with serve(create_peer(peer), pport):
         async with serve(create_coordinator(coordinator), cport) as coord_url:
             await _beat(coord_url, bob)
-            client = _client(coord_url, alice)
+            client = _client(coord_url, alice, coordinator.roster)
             with pytest.raises(Exception) as caught:
                 await client.complete([{"role": "user", "content": "hi"}], model="mock-1b")
 
@@ -349,7 +350,7 @@ async def test_sanitising_an_error_frame_keeps_the_guidance_that_makes_it_action
     async with serve(create_peer(peer), pport):
         async with serve(create_coordinator(coordinator), cport) as coord_url:
             await _beat(coord_url, bob)
-            client = _client(coord_url, alice)
+            client = _client(coord_url, alice, coordinator.roster)
             with pytest.raises(Exception) as caught:
                 await client.complete([{"role": "user", "content": "hi"}], model="mock-1b")
 
@@ -382,7 +383,7 @@ async def test_relayed_peer_error_body_is_sanitised_before_it_reaches_the_client
     async with serve(hostile_peer, pport):
         async with serve(create_coordinator(coordinator), cport) as coord_url:
             await _beat(coord_url, bob)
-            client = _client(coord_url, alice)
+            client = _client(coord_url, alice, coordinator.roster)
             with pytest.raises(Exception) as caught:
                 await client.complete([{"role": "user", "content": "hi"}], model="mock-1b")
 

@@ -113,6 +113,19 @@ Response:
 Waiters are ordered by **fair-share score**, not arrival. Contributors in surplus are
 served first.
 
+**The client verifies this response against its own roster before sealing anything.**
+`peer_enc_pub` is echoed here for convenience and is *not* authority: the client
+resolves `peer_id` in the signed roster it pinned at join time and seals to the key
+that document names. A lease is refused if `peer_id` is not on the roster, if
+`peer_enc_pub` differs from the roster's entry for it, or if the peer serves a model
+other than the one requested.
+
+This matters because the coordinator is untrusted and would otherwise be choosing the
+recipient of the sealed key. A coordinator that answered with its own X25519 public key
+would be handed the master secret, and nothing downstream would notice — the envelope
+signature, the chunk nonces and the sequence checks all verify a session whose key the
+coordinator picked. Routing is the coordinator's decision; key material is the roster's.
+
 ## 3. Envelope — round two
 
 ```

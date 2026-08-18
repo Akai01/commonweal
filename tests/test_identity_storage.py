@@ -213,3 +213,4 @@ def test_a_broken_backend_counts_as_no_backend(monkeypatch):
 def test_availability_is_false_when_keyring_is_not_installed(monkeypatch):
     monkeypatch.setitem(sys.modules, "keyring", None)   # import raises
     assert keymod.keyring_available() is False
+

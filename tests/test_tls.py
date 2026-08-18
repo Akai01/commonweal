@@ -169,6 +169,7 @@ async def test_full_federation_over_https(ca):
                 sign_pub=bytes(alice.signing_key.verify_key),
                 enc_priv=alice.enc_priv, enc_pub=b"",
             ),
+            roster=roster,
             timeout=30.0,
             tls=tls,
         )

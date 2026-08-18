@@ -20,6 +20,33 @@ from .keys import (
 )
 
 
+def _load_pinned_roster(args):
+    """(roster, None) or (None, exit_code), printing the reason on stderr.
+
+    Shared by every subcommand that talks to a coordinator. The admin keys come
+    from the command line and never from the document -- a roster that vouched
+    for its own signers would be forgeable by anyone.
+    """
+    from ..roster import Roster, RosterError
+
+    keys = {}
+    for pair in args.admin_key:
+        member_id, _, pubkey = pair.partition("=")
+        if not member_id or not pubkey:
+            print(f"error: --admin-key expects member_id=BASE64, got {pair!r}", file=sys.stderr)
+            return None, 1
+        keys[member_id] = pubkey
+    if not keys:
+        print("error: at least one --admin-key is required", file=sys.stderr)
+        return None, 1
+    try:
+        doc = json.loads(Path(args.roster).read_text(encoding="utf-8"))
+        return Roster.load(doc, trusted_admin_keys=keys), None
+    except (OSError, json.JSONDecodeError, RosterError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return None, 1
+
+
 def _cmd_keygen(args) -> int:
     path = Path(args.identity)
     if path.exists() and not args.force:
@@ -143,26 +170,17 @@ def _cmd_contribute(args) -> int:
     import asyncio
 
     from ..peer.heartbeat import send_heartbeat
-    from ..roster import Roster, RosterError
+    from ..roster import RosterError
 
     identity = Identity.load(args.identity)
-    keys = {}
-    for pair in args.admin_key:
-        member_id, _, pubkey = pair.partition("=")
-        if not member_id or not pubkey:
-            print(f"error: --admin-key expects member_id=BASE64, got {pair!r}", file=sys.stderr)
-            return 1
-        keys[member_id] = pubkey
-    if not keys:
-        print("error: at least one --admin-key is required", file=sys.stderr)
-        return 1
+    roster, failed = _load_pinned_roster(args)
+    if failed is not None:
+        return failed
 
     try:
-        doc = json.loads(Path(args.roster).read_text(encoding="utf-8"))
-        roster = Roster.load(doc, trusted_admin_keys=keys)
         peer = roster.peer(args.peer_id)
         tls = tls_from_args(args)
-    except (OSError, json.JSONDecodeError, RosterError, TLSError) as exc:
+    except (RosterError, TLSError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
 
@@ -222,8 +240,15 @@ def _cmd_contribute(args) -> int:
 
 def _cmd_chat(args) -> int:
     identity = Identity.load(args.identity)
+    # The roster is not optional here. The client seals to the key it names, so
+    # without it the coordinator would choose who can read the prompt.
+    roster, failed = _load_pinned_roster(args)
+    if failed is not None:
+        return failed
     try:
-        client = CommonwealClient(args.coordinator, identity, tls=tls_from_args(args))
+        client = CommonwealClient(
+            args.coordinator, identity, roster=roster, tls=tls_from_args(args)
+        )
     except TLSError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
@@ -334,6 +359,16 @@ def main(argv: list[str] | None = None) -> int:
     ch = sub.add_parser("chat", help="send a prompt to the federation")
     ch.add_argument("prompt", nargs="?")
     ch.add_argument("--coordinator", default="http://127.0.0.1:8080")
+    ch.add_argument(
+        "--roster", required=True,
+        help="the signed roster. Required: the client seals to the peer key this "
+             "document names, so that the untrusted coordinator cannot nominate "
+             "a key of its own and read the prompt",
+    )
+    ch.add_argument(
+        "--admin-key", action="append", default=[], metavar="ID=BASE64",
+        help="trusted admin public key, pinned out of band at join time (repeatable)",
+    )
     ch.add_argument("--model", required=True)
     ch.add_argument("--max-tokens", type=int, default=512)
     ch.add_argument("--temperature", type=float, default=0.7)
